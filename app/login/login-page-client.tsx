@@ -96,12 +96,12 @@ export default function LoginPageClient() {
           </p>
           <form className="auth-form" onSubmit={onSubmit}>
             <div className="form-group">
-              <label>Admin Email</label>
+              <label>Admin Email or Username</label>
               <input
-                type="email"
+                type="text"
                 required
                 autoComplete="username"
-                placeholder="admin@demitechwebservices.live"
+                placeholder="ADMIN  ·  or  admin@demitechwebservices.live"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />

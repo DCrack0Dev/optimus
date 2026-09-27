@@ -30,12 +30,14 @@ function bypassAdminAuth(
   const pass = process.env.OPTIMUS_BYPASS_ADMIN_PASSWORD;
   if (!user || !pass) return null;
   if (!email || !password) return null;
-  if (email.trim() !== user.trim() || password !== pass) return null;
+  const userIn = email.trim();
+  const userCfg = user.trim();
+  if (userIn.toLowerCase() !== userCfg.toLowerCase() || password !== pass) return null;
   return {
     ok: true,
     role: "admin",
     uid: "optimus-local-admin",
-    email: email.trim()
+    email: userCfg
   };
 }
 
