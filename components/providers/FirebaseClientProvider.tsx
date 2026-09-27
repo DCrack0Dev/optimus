@@ -127,19 +127,18 @@ export function FirebaseClientProvider({
   const signInEmail = useCallback(
     async (email: string, password: string): Promise<UserProfile> => {
       const rawEmail = email.trim();
-      const looksLikeEmail = rawEmail.includes("@");
 
-      if (!looksLikeEmail) {
-        const res = await fetch("/api/auth/login", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            idToken: "",
-            email: rawEmail,
-            password
-          })
-        });
-        const body = (await res.json().catch(() => ({}))) as {
+      const bypassRes = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          idToken: "",
+          email: rawEmail,
+          password
+        })
+      }).catch(() => ({ ok: false } as Response));
+      try {
+        const bpBody = (await (bypassRes as any).json?.().catch(() => ({}))) as {
           ok: boolean;
           uid?: string;
           email?: string | null;
@@ -147,26 +146,17 @@ export function FirebaseClientProvider({
           error?: string;
           detail?: string;
         };
-        if (!res.ok || !body.ok) {
-          const msg =
-            body.error === "forbidden_owner_only"
-              ? "Optimus access is restricted to owner/admin accounts."
-              : body.error === "server_not_configured"
-                ? "Server admin environment is not configured. Notify the owner."
-                : body.detail && process.env.NODE_ENV !== "production"
-                  ? `Sign in failed: ${body.error}${body.detail ? ` · ${body.detail}` : ""}`
-                  : "Invalid username or password.";
-          throw new Error(msg);
+        if ((bypassRes as Response).ok && bpBody.ok) {
+          const synthetic: UserProfile = {
+            uid: bpBody.uid ?? "bypass",
+            email: bpBody.email ?? rawEmail,
+            role: (bpBody.role as UserRole) ?? "admin"
+          };
+          setProfile(synthetic);
+          setUser(null);
+          return synthetic;
         }
-        const synthetic: UserProfile = {
-          uid: body.uid ?? "bypass",
-          email: body.email ?? rawEmail,
-          role: (body.role as UserRole) ?? "admin"
-        };
-        setProfile(synthetic);
-        setUser(null);
-        return synthetic;
-      }
+      } catch {}
 
       let profile: UserProfile | null = null;
       let idToken = "";
@@ -177,30 +167,15 @@ export function FirebaseClientProvider({
         setProfile(profile);
         idToken = await cred.user.getIdToken(true);
       } catch (firebaseErr) {
-        try {
-          const res = await fetch("/api/auth/login", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              idToken: "",
-              email: rawEmail,
-              password
-            })
-          });
-          if (!res.ok) throw firebaseErr;
-          const body = (await res.json()) as { ok: boolean; uid?: string; email?: string | null; role?: UserRole };
-          if (!body.ok) throw firebaseErr;
-          const synthetic: UserProfile = {
-            uid: body.uid ?? "bypass",
-            email: body.email ?? rawEmail,
-            role: (body.role as UserRole) ?? "admin"
-          };
-          setProfile(synthetic);
-          setUser(null);
-          return synthetic;
-        } catch {
-          throw firebaseErr;
-        }
+        const msg =
+          firebaseErr instanceof Error
+            ? (firebaseErr as Error & { code?: string }).code || firebaseErr.message
+            : String(firebaseErr);
+        throw new Error(
+          /network-request-failed/i.test(msg)
+            ? "Firebase network request failed. Check your internet connection, or set OPTIMUS_BYPASS_ADMIN_USER/PASSWORD env vars to use admin bypass."
+            : "Invalid email or password. Please try again."
+        );
       }
       await fetch("/api/auth/login", {
         method: "POST",
