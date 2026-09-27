@@ -11,13 +11,32 @@ import {
 
 const BodySchema = z.object({
   idToken: z.string().min(1).max(4096),
-  remember: z.boolean().optional().default(false)
+  remember: z.boolean().optional().default(false),
+  email: z.string().max(255).optional(),
+  password: z.string().max(255).optional()
 });
 
 function pickRole(...candidates: Array<UserRole | undefined>): UserRole {
   const order: Array<UserRole> = ["admin", "staff", "agent", "client"];
   for (const r of order) if (candidates.includes(r)) return r;
   return "client";
+}
+
+function bypassAdminAuth(
+  email: string | undefined,
+  password: string | undefined
+): { ok: boolean; role: UserRole; uid: string; email: string } | null {
+  const user = process.env.OPTIMUS_BYPASS_ADMIN_USER;
+  const pass = process.env.OPTIMUS_BYPASS_ADMIN_PASSWORD;
+  if (!user || !pass) return null;
+  if (!email || !password) return null;
+  if (email.trim() !== user.trim() || password !== pass) return null;
+  return {
+    ok: true,
+    role: "admin",
+    uid: "optimus-local-admin",
+    email: email.trim()
+  };
 }
 
 export async function POST(req: NextRequest) {
@@ -30,19 +49,26 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-    const { idToken, remember } = parse.data;
+    const { idToken, remember, email, password } = parse.data;
     const store = cookies();
 
     let uid: string | null = null;
-    let email: string | null = null;
+    let userEmail: string | null = null;
     let verifiedRole: UserRole = "client";
+    let sessionIdToken = idToken;
 
-    if (isAdminConfigured()) {
+    const bypass = bypassAdminAuth(email, password);
+    if (bypass) {
+      uid = bypass.uid;
+      userEmail = bypass.email;
+      verifiedRole = bypass.role;
+      sessionIdToken = idToken || `bypass:${bypass.uid}:${Date.now()}`;
+    } else if (isAdminConfigured()) {
       try {
         const auth = getAdminAuth();
         const decoded = await auth.verifyIdToken(idToken, true);
         uid = decoded.uid;
-        email = decoded.email ?? null;
+        userEmail = decoded.email ?? null;
         const claimAdmin = decoded.admin === true;
         const claimRole = decoded.role as UserRole | undefined;
         try {
@@ -56,7 +82,7 @@ export async function POST(req: NextRequest) {
               claimRole,
               profileRole
             );
-            if (!email && data?.email) email = data.email;
+            if (!userEmail && data?.email) userEmail = data.email;
           } else {
             verifiedRole = pickRole(claimAdmin ? "admin" : undefined, claimRole);
           }
@@ -84,7 +110,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const sessionRes = await createOptimusSessionCookie(idToken, remember, verifiedRole);
+    const sessionRes = await createOptimusSessionCookie(sessionIdToken, remember, verifiedRole);
     setOptimusSessionCookieUsingStore(store, sessionRes.cookie, remember);
 
     const headers = new Headers();
@@ -95,7 +121,7 @@ export async function POST(req: NextRequest) {
       {
         ok: true,
         uid: uid ?? "local_only",
-        email,
+        email: userEmail,
         role: sessionRes.role,
         cookieSet: true,
         expiresAt: Date.now() + expiresMs
