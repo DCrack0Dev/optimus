@@ -37,8 +37,13 @@ export default function LoginPageClient() {
         return;
       }
       router.replace(next ?? "/dashboard/command");
-    } catch {
-      setError("Invalid email or password. Please try again.");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(
+        msg && typeof msg === "string" && msg.trim().length > 0
+          ? msg
+          : "Invalid username or password. Please try again."
+      );
     } finally {
       setLoading(false);
     }

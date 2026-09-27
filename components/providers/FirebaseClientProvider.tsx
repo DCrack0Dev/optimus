@@ -126,11 +126,53 @@ export function FirebaseClientProvider({
 
   const signInEmail = useCallback(
     async (email: string, password: string): Promise<UserProfile> => {
+      const rawEmail = email.trim();
+      const looksLikeEmail = rawEmail.includes("@");
+
+      if (!looksLikeEmail) {
+        const res = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            idToken: "",
+            email: rawEmail,
+            password
+          })
+        });
+        const body = (await res.json().catch(() => ({}))) as {
+          ok: boolean;
+          uid?: string;
+          email?: string | null;
+          role?: UserRole;
+          error?: string;
+          detail?: string;
+        };
+        if (!res.ok || !body.ok) {
+          const msg =
+            body.error === "forbidden_owner_only"
+              ? "Optimus access is restricted to owner/admin accounts."
+              : body.error === "server_not_configured"
+                ? "Server admin environment is not configured. Notify the owner."
+                : body.detail && process.env.NODE_ENV !== "production"
+                  ? `Sign in failed: ${body.error}${body.detail ? ` · ${body.detail}` : ""}`
+                  : "Invalid username or password.";
+          throw new Error(msg);
+        }
+        const synthetic: UserProfile = {
+          uid: body.uid ?? "bypass",
+          email: body.email ?? rawEmail,
+          role: (body.role as UserRole) ?? "admin"
+        };
+        setProfile(synthetic);
+        setUser(null);
+        return synthetic;
+      }
+
       let profile: UserProfile | null = null;
       let idToken = "";
       try {
         const auth = getFirebaseClientAuth();
-        const cred = await fbSignInEmail(auth, email, password);
+        const cred = await fbSignInEmail(auth, rawEmail, password);
         profile = await fetchProfile(cred.user.uid, cred.user.email);
         setProfile(profile);
         idToken = await cred.user.getIdToken(true);
@@ -141,7 +183,7 @@ export function FirebaseClientProvider({
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               idToken: "",
-              email,
+              email: rawEmail,
               password
             })
           });
@@ -150,7 +192,7 @@ export function FirebaseClientProvider({
           if (!body.ok) throw firebaseErr;
           const synthetic: UserProfile = {
             uid: body.uid ?? "bypass",
-            email: body.email ?? email ?? null,
+            email: body.email ?? rawEmail,
             role: (body.role as UserRole) ?? "admin"
           };
           setProfile(synthetic);
@@ -163,7 +205,7 @@ export function FirebaseClientProvider({
       await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idToken, email, password })
+        body: JSON.stringify({ idToken, email: rawEmail, password })
       });
       return profile ?? { uid: "", email: null, role: "client" };
     },
