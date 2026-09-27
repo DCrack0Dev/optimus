@@ -14,7 +14,7 @@ const PUBLIC_WEBHOOK_PREFIXES = [
   "/api/tts"
 ];
 
-const WEBSITE_ORIGIN_FALLBACK = "https://demitechwebservices.live";
+const WEBSITE_ORIGIN_FALLBACK = "";
 
 export const config = {
   matcher: [
@@ -22,9 +22,20 @@ export const config = {
   ]
 };
 
-function websiteOrigin(): string {
+function websiteOrigin(req: NextRequest): string {
   const raw = process.env.NEXT_PUBLIC_WEBSITE_URL ?? process.env.NEXT_PUBLIC_SITE_URL ?? WEBSITE_ORIGIN_FALLBACK;
-  return String(raw).replace(/\/$/, "");
+  const cleaned = String(raw).replace(/\/$/, "");
+  if (cleaned) return cleaned;
+  try { return new URL("/", req.nextUrl).origin.replace(/\/$/, ""); }
+  catch { return ""; }
+}
+
+function optimusOrigin(req: NextRequest): string {
+  const raw = process.env.NEXT_PUBLIC_OPTIMUS_URL;
+  const cleaned = String(raw ?? "").replace(/\/$/, "");
+  if (cleaned) return cleaned;
+  try { return new URL("/", req.nextUrl).origin.replace(/\/$/, ""); }
+  catch { return ""; }
 }
 
 function isPublicWebhook(pathname: string): boolean {
@@ -71,7 +82,8 @@ export function middleware(req: NextRequest) {
     ];
     if (websiteOnlyUi.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
       try {
-        const dest = new URL(pathname + (req.nextUrl.search || ""), websiteOrigin());
+        const base = websiteOrigin(req);
+        const dest = new URL(pathname + (req.nextUrl.search || ""), base || req.nextUrl.origin);
         return redirectTo(dest, 308);
       } catch {
         const u = req.nextUrl.clone();
@@ -123,7 +135,8 @@ export function middleware(req: NextRequest) {
       }
       if (!isAdminSession) {
         try {
-          const dest = new URL("/dashboard/projects", websiteOrigin());
+          const base = websiteOrigin(req);
+          const dest = new URL("/dashboard/projects", base || req.nextUrl.origin);
           return redirectTo(dest, 307);
         } catch {
           const u = req.nextUrl.clone();
@@ -142,10 +155,8 @@ export function middleware(req: NextRequest) {
       u.searchParams.delete("next");
       return redirectTo(u, 307);
     } catch {
-      return NextResponse.redirect(
-        (process.env.NEXT_PUBLIC_OPTIMUS_URL ?? "https://optimus.demitechwebservices.live") + "/login",
-        307
-      );
+      const base = optimusOrigin(req);
+      return NextResponse.redirect(base + "/login", 307);
     }
   }
 }
