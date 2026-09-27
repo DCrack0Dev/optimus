@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { cookies } from "next/headers";
 import { z } from "zod";
-import { getAdminAuth, isAdminConfigured } from "@optimus/lib/firebase/admin";
+import { getAdminAuth, getAdminDb, isAdminConfigured } from "@optimus/lib/firebase/admin";
 import type { UserRole } from "@shared/types";
 import {
   createOptimusSessionCookie,
@@ -13,6 +13,12 @@ const BodySchema = z.object({
   idToken: z.string().min(1).max(4096),
   remember: z.boolean().optional().default(false)
 });
+
+function pickRole(...candidates: Array<UserRole | undefined>): UserRole {
+  const order: Array<UserRole> = ["admin", "staff", "agent", "client"];
+  for (const r of order) if (candidates.includes(r)) return r;
+  return "client";
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -37,15 +43,25 @@ export async function POST(req: NextRequest) {
         const decoded = await auth.verifyIdToken(idToken, true);
         uid = decoded.uid;
         email = decoded.email ?? null;
-        if (decoded.admin === true) verifiedRole = "admin";
+        const claimAdmin = decoded.admin === true;
         const claimRole = decoded.role as UserRole | undefined;
-        if (
-          claimRole === "admin" ||
-          claimRole === "staff" ||
-          claimRole === "agent" ||
-          claimRole === "client"
-        ) {
-          verifiedRole = claimRole;
+        try {
+          const db = getAdminDb();
+          const snap = await db.collection("profiles").doc(uid).get();
+          if (snap.exists) {
+            const data = snap.data() as { role?: UserRole; email?: string | null } | undefined;
+            const profileRole = data?.role;
+            verifiedRole = pickRole(
+              claimAdmin ? "admin" : undefined,
+              claimRole,
+              profileRole
+            );
+            if (!email && data?.email) email = data.email;
+          } else {
+            verifiedRole = pickRole(claimAdmin ? "admin" : undefined, claimRole);
+          }
+        } catch {
+          verifiedRole = pickRole(claimAdmin ? "admin" : undefined, claimRole);
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -54,12 +70,16 @@ export async function POST(req: NextRequest) {
           { status: 401 }
         );
       }
+    } else {
+      return NextResponse.json(
+        { ok: false, error: "server_not_configured" },
+        { status: 503 }
+      );
     }
 
-    // Optimus authorization gate: admin or staff only.
     if (verifiedRole !== "admin" && verifiedRole !== "staff") {
       return NextResponse.json(
-        { ok: false, error: "forbidden_owner_only" },
+        { ok: false, error: "forbidden_owner_only", uid },
         { status: 403 }
       );
     }
